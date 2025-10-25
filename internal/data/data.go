@@ -6,13 +6,16 @@ import (
 
 	"review-c/internal/conf"
 
+	"github.com/go-kratos/kratos/contrib/registry/consul/v2"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
+	"github.com/go-kratos/kratos/v2/registry"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
 	"github.com/google/wire"
+	"github.com/hashicorp/consul/api"
 )
 
-var ProviderSet = wire.NewSet(NewData, NewConsumerRepo, NewGrpcClient)
+var ProviderSet = wire.NewSet(NewData, NewConsumerRepo, NewDiscovery, NewReviewClient)
 
 type Data struct {
 	client v1.ReviewClient
@@ -25,11 +28,25 @@ func NewData(c *conf.Data, logger log.Logger, client v1.ReviewClient) (*Data, fu
 	return &Data{client: client}, cleanup, nil
 }
 
-func NewGrpcClient(logger log.Logger ) v1.ReviewClient {
+func NewDiscovery(c *conf.Registry) registry.Discovery {
+	cfg := api.DefaultConfig()
+	cfg.Address = c.Addr
+	cfg.Scheme = c.Scheme
+	client, err := api.NewClient(cfg)
+	if err != nil {
+		panic(err)
+	}
+	dis := consul.New(client)
+	return dis
+}
 
-	conn, err := grpc.DialInsecure(context.Background(), grpc.WithEndpoint("localhost:9000"), grpc.WithMiddleware(
-		recovery.Recovery(),
-	))
+func NewReviewClient(logger log.Logger, d registry.Discovery) v1.ReviewClient {
+	conn, err := grpc.DialInsecure(context.Background(),
+		grpc.WithDiscovery(d),
+		grpc.WithEndpoint("discovery:///review-service"),
+		grpc.WithMiddleware(
+			recovery.Recovery(),
+		))
 	if err != nil {
 		log.NewHelper(logger).Error("连接review-service失败")
 		return nil
